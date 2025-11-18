@@ -54,7 +54,7 @@ const POPULAR_ICONS: IconMetadata[] = [
   { name: "folder", category: "files", tags: ["directory", "collection", "organize"] },
   { name: "gear", category: "interface", tags: ["settings", "config", "preferences"] },
   { name: "heart", category: "social", tags: ["like", "favorite", "love"] },
-  { name: "home", category: "interface", tags: ["house", "main", "dashboard"] },
+  { name: "house", category: "interface", tags: ["home", "main", "dashboard"] },
   { name: "image", category: "media", tags: ["picture", "photo", "gallery"] },
   { name: "info", category: "interface", tags: ["information", "help", "about"] },
   { name: "link", category: "interface", tags: ["chain", "url", "hyperlink"] },
@@ -189,7 +189,12 @@ export default function createServer({
         }
 
         const selectedWeight = weight || config.defaultWeight;
-        const url = `${PHOSPHOR_CORE_RAW_BASE}/${selectedWeight}/${sanitizedName}.svg`;
+        // File naming: regular icons have no suffix, other weights have -{weight} suffix
+        // e.g., regular/heart.svg, bold/heart-bold.svg, duotone/heart-duotone.svg
+        const fileName = selectedWeight === "regular" 
+          ? `${sanitizedName}.svg`
+          : `${sanitizedName}-${selectedWeight}.svg`;
+        const url = `${PHOSPHOR_CORE_RAW_BASE}/${selectedWeight}/${fileName}`;
 
         // Fetch icon with timeout
         const controller = new AbortController();
@@ -221,11 +226,34 @@ export default function createServer({
         }
         
         if (!response.ok) {
+          // Search for similar icons in the catalog to suggest alternatives
+          const searchTerm = sanitizedName.toLowerCase();
+          const similarIcons = POPULAR_ICONS.filter((icon) => {
+            const iconName = icon.name.toLowerCase();
+            // Check if the search term is contained in the icon name or vice versa
+            return (
+              iconName.includes(searchTerm) ||
+              searchTerm.includes(iconName) ||
+              iconName.split('-').some(part => searchTerm.includes(part)) ||
+              searchTerm.split('-').some(part => iconName.includes(part))
+            );
+          }).slice(0, 5); // Limit to 5 suggestions
+
+          let suggestionText = "";
+          if (similarIcons.length > 0) {
+            const suggestions = similarIcons
+              .map((icon) => `- **${icon.name}** (${icon.category || "general"})`)
+              .join("\n");
+            suggestionText = `\n\n**Similar icons found in catalog:**\n${suggestions}\n\nTry using the 'search-icons' tool with "${sanitizedName}" to find more options, or use 'list-categories' to browse available icons.`;
+          } else {
+            suggestionText = `\n\n**Suggestions:**\n- Use the 'search-icons' tool with "${sanitizedName}" to find similar icons\n- Use 'list-categories' to browse available icon categories\n- Check the full catalog at https://phosphoricons.com`;
+          }
+
           return {
             content: [
               {
                 type: "text",
-                text: `Error: Icon '${sanitizedName}' not found with weight '${selectedWeight}'. Please check the icon name and weight. Icon names should be in kebab-case (e.g., 'arrow-left', 'user-circle'). Available weights: thin, light, regular, bold, fill, duotone.`,
+                text: `Error: Icon '${sanitizedName}' not found with weight '${selectedWeight}'.${suggestionText}\n\nIcon names should be in kebab-case (e.g., 'arrow-left', 'user-circle'). Available weights: thin, light, regular, bold, fill, duotone.`,
               },
             ],
             isError: true,
@@ -253,20 +281,29 @@ export default function createServer({
           if (selectedWeight === "fill") {
             svgContent = svgContent.replace(/fill="[^"]*"/g, `fill="${color}"`);
           }
-          // For other weights, replace stroke attributes
+          // For duotone, replace both fill and stroke
           else if (selectedWeight === "duotone") {
-            // Duotone has both fill and stroke - replace both
             svgContent = svgContent.replace(/fill="[^"]*"/g, `fill="${color}"`);
             svgContent = svgContent.replace(/stroke="[^"]*"/g, `stroke="${color}"`);
           } else {
+            // For other weights (thin, light, regular, bold), replace both fill and stroke
+            // Regular weight uses fill="currentColor", while others may use stroke
+            svgContent = svgContent.replace(/fill="[^"]*"/g, `fill="${color}"`);
             svgContent = svgContent.replace(/stroke="[^"]*"/g, `stroke="${color}"`);
           }
         }
 
         // Apply size if specified
         if (size) {
-          svgContent = svgContent.replace(/width="[^"]*"/, `width="${size}"`);
-          svgContent = svgContent.replace(/height="[^"]*"/, `height="${size}"`);
+          // Check if width/height attributes exist, if not add them
+          if (!svgContent.includes('width=')) {
+            // Add width and height attributes to the SVG tag
+            svgContent = svgContent.replace(/<svg([^>]*)>/, `<svg$1 width="${size}" height="${size}">`);
+          } else {
+            // Replace existing width and height
+            svgContent = svgContent.replace(/width="[^"]*"/, `width="${size}"`);
+            svgContent = svgContent.replace(/height="[^"]*"/, `height="${size}"`);
+          }
         }
 
         const colorInfo = color ? ` with color '${color}'` : "";
@@ -350,11 +387,22 @@ export default function createServer({
       }).slice(0, safeLimit);
 
       if (matches.length === 0) {
+        // Suggest using list-categories to see what's available
+        const categories = Array.from(
+          new Set(
+            POPULAR_ICONS.map((icon) => icon.category).filter(
+              (cat): cat is string => cat !== undefined
+            )
+          )
+        ).sort();
+        
+        const categoryList = categories.slice(0, 5).join(", ");
+        
         return {
           content: [
             {
               type: "text",
-              text: `No icons found matching "${query}". Try different keywords or check the full catalog at https://phosphoricons.com`,
+              text: `No icons found matching "${query}".\n\n**Available options:**\n- Use 'list-categories' to see all icon categories (${categories.length} categories available, e.g., ${categoryList})\n- Try different search keywords\n- Check the full catalog at https://phosphoricons.com\n\n**Tip:** Use 'list-categories' first to see what's available, then search within specific categories.`,
             },
           ],
         };
@@ -367,11 +415,17 @@ export default function createServer({
         })
         .join("\n\n");
 
+      // Proactively suggest retrieving icons
+      const exampleIcon = matches[0];
+      const suggestionText = exampleIcon 
+        ? `\n\n**Quick start:** Use \`get-icon\` with name "${exampleIcon.name}" to retrieve the SVG:\n\`get-icon({ name: "${exampleIcon.name}", weight: "regular" })\`\n\nOr retrieve multiple icons at once with \`get-multiple-icons\`.`
+        : "";
+
       return {
         content: [
           {
             type: "text",
-            text: `Found ${matches.length} icon(s) matching "${query}":\n\n${resultText}\n\nUse the 'get-icon' tool with the icon name to retrieve the SVG.`,
+            text: `Found ${matches.length} icon(s) matching "${query}":\n\n${resultText}${suggestionText}\n\nUse the 'get-icon' tool with any icon name above to retrieve the SVG.`,
           },
         ],
       };
@@ -399,15 +453,24 @@ export default function createServer({
           const count = POPULAR_ICONS.filter(
             (icon) => icon.category === cat
           ).length;
-          return `- **${cat}**: ${count} icon(s)`;
+          const exampleIcon = POPULAR_ICONS.find(icon => icon.category === cat);
+          const example = exampleIcon ? ` (e.g., ${exampleIcon.name})` : "";
+          return `- **${cat}**: ${count} icon(s)${example}`;
         })
         .join("\n");
+
+      const exampleCategory = categories[0];
+      const exampleIcons = POPULAR_ICONS
+        .filter(icon => icon.category === exampleCategory)
+        .slice(0, 3)
+        .map(icon => icon.name)
+        .join(", ");
 
       return {
         content: [
           {
             type: "text",
-            text: `# Phosphor Icons Categories\n\n${categoryList}\n\nUse 'search-icons' with a category name to find icons in that category.`,
+            text: `# Phosphor Icons Categories\n\n${categoryList}\n\n**Next steps:**\n- Use 'search-icons' with a category name (e.g., "${exampleCategory}") to find icons in that category\n- Use 'search-icons' with an icon name (e.g., "${exampleIcons}") to find specific icons\n- Use 'get-icon' with any icon name to retrieve the SVG\n\n**Example:** \`search-icons({ query: "${exampleCategory}" })\` to see all ${exampleCategory} icons.`,
           },
         ],
       };
@@ -491,7 +554,11 @@ export default function createServer({
           }
 
           const sanitizedName = name.trim().toLowerCase().replace(/[^a-z0-9-]/g, "");
-          const url = `${PHOSPHOR_CORE_RAW_BASE}/${selectedWeight}/${sanitizedName}.svg`;
+          // File naming: regular icons have no suffix, other weights have -{weight} suffix
+          const fileName = selectedWeight === "regular" 
+            ? `${sanitizedName}.svg`
+            : `${sanitizedName}-${selectedWeight}.svg`;
+          const url = `${PHOSPHOR_CORE_RAW_BASE}/${selectedWeight}/${fileName}`;
           
           const controller = new AbortController();
           const timeoutId = setTimeout(() => controller.abort(), 10000);
@@ -525,19 +592,48 @@ export default function createServer({
                 svgContent = svgContent.replace(/fill="[^"]*"/g, `fill="${color}"`);
                 svgContent = svgContent.replace(/stroke="[^"]*"/g, `stroke="${color}"`);
               } else {
+                // For other weights (thin, light, regular, bold), replace both fill and stroke
+                // Regular weight uses fill="currentColor", while others may use stroke
+                svgContent = svgContent.replace(/fill="[^"]*"/g, `fill="${color}"`);
                 svgContent = svgContent.replace(/stroke="[^"]*"/g, `stroke="${color}"`);
               }
             }
 
             // Apply size if specified
             if (size) {
-              svgContent = svgContent.replace(/width="[^"]*"/, `width="${size}"`);
-              svgContent = svgContent.replace(/height="[^"]*"/, `height="${size}"`);
+              // Check if width/height attributes exist, if not add them
+              if (!svgContent.includes('width=')) {
+                // Add width and height attributes to the SVG tag
+                svgContent = svgContent.replace(/<svg([^>]*)>/, `<svg$1 width="${size}" height="${size}">`);
+              } else {
+                // Replace existing width and height
+                svgContent = svgContent.replace(/width="[^"]*"/, `width="${size}"`);
+                svgContent = svgContent.replace(/height="[^"]*"/, `height="${size}"`);
+              }
             }
 
             results.push(`## ${name}\n\`\`\`svg\n${svgContent}\n\`\`\``);
           } else {
-            results.push(`## ${name}\n❌ Not found`);
+            // Search for similar icons to suggest alternatives
+            const searchTerm = sanitizedName.toLowerCase();
+            const similarIcons = POPULAR_ICONS.filter((icon) => {
+              const iconName = icon.name.toLowerCase();
+              return (
+                iconName.includes(searchTerm) ||
+                searchTerm.includes(iconName) ||
+                iconName.split('-').some(part => searchTerm.includes(part)) ||
+                searchTerm.split('-').some(part => iconName.includes(part))
+              );
+            }).slice(0, 3);
+
+            let suggestionText = "";
+            if (similarIcons.length > 0) {
+              const suggestions = similarIcons
+                .map((icon) => `- ${icon.name}`)
+                .join(", ");
+              suggestionText = ` (Similar: ${suggestions})`;
+            }
+            results.push(`## ${name}\n❌ Not found${suggestionText}`);
           }
         } catch (error) {
           results.push(
