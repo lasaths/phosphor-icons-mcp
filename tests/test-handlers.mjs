@@ -54,14 +54,18 @@ async function testIconColorModification() {
   try {
     const iconName = 'heart';
     const weight = 'fill';
-    const url = `${PHOSPHOR_CORE_RAW_BASE}/${weight}/${iconName}.svg`;
+    // For non-regular weights, filename is {name}-{weight}.svg
+    const fileName = weight === 'regular' ? `${iconName}.svg` : `${iconName}-${weight}.svg`;
+    const url = `${PHOSPHOR_CORE_RAW_BASE}/${weight}/${fileName}`;
     
-    const response = await fetch(url);
+    const response = await fetch(url, {
+      headers: { 'User-Agent': 'PhosphorIconsMCP/1.0.0' }
+    });
     if (response.ok) {
       let svg = await response.text();
       const originalSvg = svg;
       
-      // Apply color (simulating the handler logic)
+      // Apply color (simulating the handler logic for fill weight)
       svg = svg.replace(/fill="[^"]*"/g, `fill="#FF0000"`);
       
       const hasColor = svg.includes('#FF0000') || svg.includes('fill="#FF0000"');
@@ -70,7 +74,7 @@ async function testIconColorModification() {
       console.log('   SVG changed:', originalSvg !== svg ? '✅' : '❌');
       return true;
     } else {
-      console.log('❌ Failed to fetch icon');
+      console.log('❌ Failed to fetch icon:', response.status, response.statusText);
       return false;
     }
   } catch (error) {
@@ -85,17 +89,24 @@ async function testIconSizeModification() {
   try {
     const iconName = 'heart'; // Use heart which we know exists
     const weight = 'regular';
-    const url = `${PHOSPHOR_CORE_RAW_BASE}/${weight}/${iconName}.svg`;
+    const fileName = weight === 'regular' ? `${iconName}.svg` : `${iconName}-${weight}.svg`;
+    const url = `${PHOSPHOR_CORE_RAW_BASE}/${weight}/${fileName}`;
     
-    const response = await fetch(url);
+    const response = await fetch(url, {
+      headers: { 'User-Agent': 'PhosphorIconsMCP/1.0.0' }
+    });
     if (response.ok) {
       let svg = await response.text();
       const originalSvg = svg;
       
-      // Apply size (simulating the handler logic)
+      // Apply size (simulating the handler logic - check if width exists first)
       const size = 32;
-      svg = svg.replace(/width="[^"]*"/, `width="${size}"`);
-      svg = svg.replace(/height="[^"]*"/, `height="${size}"`);
+      if (!svg.includes('width=')) {
+        svg = svg.replace(/<svg([^>]*)>/, `<svg$1 width="${size}" height="${size}">`);
+      } else {
+        svg = svg.replace(/width="[^"]*"/, `width="${size}"`);
+        svg = svg.replace(/height="[^"]*"/, `height="${size}"`);
+      }
       
       const hasSize = svg.includes(`width="${size}"`) && svg.includes(`height="${size}"`);
       console.log('✅ Size modification test');
@@ -103,7 +114,7 @@ async function testIconSizeModification() {
       console.log('   SVG changed:', originalSvg !== svg ? '✅' : '❌');
       return true;
     } else {
-      console.log('❌ Failed to fetch icon');
+      console.log('❌ Failed to fetch icon:', response.status, response.statusText);
       return false;
     }
   } catch (error) {
@@ -198,7 +209,9 @@ async function testDifferentWeights() {
   
   for (const weight of weights) {
     try {
-      const url = `${PHOSPHOR_CORE_RAW_BASE}/${weight}/${iconName}.svg`;
+      // For non-regular weights, filename is {name}-{weight}.svg
+      const fileName = weight === 'regular' ? `${iconName}.svg` : `${iconName}-${weight}.svg`;
+      const url = `${PHOSPHOR_CORE_RAW_BASE}/${weight}/${fileName}`;
       const response = await fetch(url, {
         headers: { 'User-Agent': 'PhosphorIconsMCP/1.0.0' }
       });
