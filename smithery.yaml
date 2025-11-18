@@ -1,2 +1,7 @@
 runtime: typescript
 target: remote
+build:
+  command: npm install && npm run build
+startCommand:
+  type: http
+  command: node dist/index.js

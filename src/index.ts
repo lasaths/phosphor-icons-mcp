@@ -1,8 +1,29 @@
+/**
+ * Phosphor Icons MCP Server
+ * 
+ * A Model Context Protocol server that provides seamless access to Phosphor Icons,
+ * a flexible icon family with 6 different weights and 1,400+ beautiful icons.
+ * 
+ * @module PhosphorIconsMCP
+ * @version 1.0.0
+ */
+
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 
+/**
+ * Base URL for fetching Phosphor Icons from GitHub
+ */
 const PHOSPHOR_CORE_RAW_BASE = "https://raw.githubusercontent.com/phosphor-icons/core/main/assets";
 
+/**
+ * Icon metadata interface
+ * 
+ * @interface IconMetadata
+ * @property {string} name - Icon name in kebab-case
+ * @property {string} [category] - Optional category classification
+ * @property {string[]} [tags] - Optional array of descriptive tags
+ */
 interface IconMetadata {
   name: string;
   category?: string;
@@ -57,6 +78,13 @@ const POPULAR_ICONS: IconMetadata[] = [
   { name: "x", category: "interface", tags: ["close", "cancel", "remove"] },
 ];
 
+/**
+ * Server configuration schema
+ * 
+ * Defines the configuration options available for the MCP server.
+ * 
+ * @type {z.ZodObject}
+ */
 export const configSchema = z.object({
   defaultWeight: z
     .enum(["thin", "light", "regular", "bold", "fill", "duotone"])
@@ -64,6 +92,20 @@ export const configSchema = z.object({
     .describe("Default icon weight/style"),
 });
 
+/**
+ * Creates and configures the Phosphor Icons MCP server
+ * 
+ * @param {Object} options - Server configuration options
+ * @param {z.infer<typeof configSchema>} options.config - Server configuration
+ * @returns {Promise<McpServer>} Configured MCP server instance
+ * 
+ * @example
+ * ```typescript
+ * const server = createServer({
+ *   config: { defaultWeight: "bold" }
+ * });
+ * ```
+ */
 export default function createServer({
   config,
 }: {
@@ -106,17 +148,84 @@ export default function createServer({
     },
     async ({ name, weight, color, size }) => {
       try {
-        const selectedWeight = weight || config.defaultWeight;
-        const url = `${PHOSPHOR_CORE_RAW_BASE}/${selectedWeight}/${name}.svg`;
+        // Validate and sanitize inputs
+        if (!name || typeof name !== "string" || name.trim().length === 0) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: "Error: Icon name is required and must be a non-empty string.",
+              },
+            ],
+            isError: true,
+          };
+        }
 
-        const response = await fetch(url);
+        // Sanitize icon name to prevent path traversal
+        const sanitizedName = name.trim().toLowerCase().replace(/[^a-z0-9-]/g, "");
+        if (sanitizedName !== name.toLowerCase()) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: `Error: Invalid icon name '${name}'. Icon names must be in kebab-case and contain only lowercase letters, numbers, and hyphens (e.g., 'arrow-left', 'user-circle').`,
+              },
+            ],
+            isError: true,
+          };
+        }
+
+        // Validate size if provided
+        if (size !== undefined && (typeof size !== "number" || size <= 0 || size > 4096)) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: "Error: Size must be a positive number between 1 and 4096 pixels.",
+              },
+            ],
+            isError: true,
+          };
+        }
+
+        const selectedWeight = weight || config.defaultWeight;
+        const url = `${PHOSPHOR_CORE_RAW_BASE}/${selectedWeight}/${sanitizedName}.svg`;
+
+        // Fetch icon with timeout
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 second timeout
+
+        let response: Response;
+        try {
+          response = await fetch(url, {
+            signal: controller.signal,
+            headers: {
+              "User-Agent": "PhosphorIconsMCP/1.0.0",
+            },
+          });
+          clearTimeout(timeoutId);
+        } catch (fetchError) {
+          clearTimeout(timeoutId);
+          if (fetchError instanceof Error && fetchError.name === "AbortError") {
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: "Error: Request timeout. The icon service may be temporarily unavailable.",
+                },
+              ],
+              isError: true,
+            };
+          }
+          throw fetchError;
+        }
         
         if (!response.ok) {
           return {
             content: [
               {
                 type: "text",
-                text: `Error: Icon '${name}' not found with weight '${selectedWeight}'. Please check the icon name and weight. Icon names should be in kebab-case (e.g., 'arrow-left', 'user-circle').`,
+                text: `Error: Icon '${sanitizedName}' not found with weight '${selectedWeight}'. Please check the icon name and weight. Icon names should be in kebab-case (e.g., 'arrow-left', 'user-circle'). Available weights: thin, light, regular, bold, fill, duotone.`,
               },
             ],
             isError: true,
@@ -124,6 +233,19 @@ export default function createServer({
         }
 
         let svgContent = await response.text();
+        
+        // Validate SVG content
+        if (!svgContent || !svgContent.trim().startsWith("<svg")) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: "Error: Invalid SVG content received from the icon service.",
+              },
+            ],
+            isError: true,
+          };
+        }
 
         // Apply color if specified
         if (color) {
@@ -159,11 +281,12 @@ export default function createServer({
           ],
         };
       } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : String(error);
         return {
           content: [
             {
               type: "text",
-              text: `Error fetching icon: ${error instanceof Error ? error.message : String(error)}`,
+              text: `Error fetching icon: ${errorMessage}. Please verify the icon name and try again.`,
             },
           ],
           isError: true,
@@ -190,7 +313,33 @@ export default function createServer({
       },
     },
     async ({ query, limit = 10 }) => {
-      const searchTerm = query.toLowerCase();
+      // Validate inputs
+      if (!query || typeof query !== "string" || query.trim().length === 0) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: "Error: Search query is required and must be a non-empty string.",
+            },
+          ],
+          isError: true,
+        };
+      }
+
+      if (limit !== undefined && (typeof limit !== "number" || limit <= 0 || limit > 100)) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: "Error: Limit must be a positive number between 1 and 100.",
+            },
+          ],
+          isError: true,
+        };
+      }
+
+      const searchTerm = query.toLowerCase().trim();
+      const safeLimit = Math.min(Math.max(1, Math.floor(limit || 10)), 100);
       
       const matches = POPULAR_ICONS.filter((icon) => {
         return (
@@ -198,7 +347,7 @@ export default function createServer({
           icon.category?.toLowerCase().includes(searchTerm) ||
           icon.tags?.some((tag) => tag.toLowerCase().includes(searchTerm))
         );
-      }).slice(0, limit);
+      }).slice(0, safeLimit);
 
       if (matches.length === 0) {
         return {
@@ -292,13 +441,78 @@ export default function createServer({
       },
     },
     async ({ names, weight, color, size }) => {
+      // Validate inputs
+      if (!Array.isArray(names) || names.length === 0) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: "Error: 'names' must be a non-empty array of icon names.",
+            },
+          ],
+          isError: true,
+        };
+      }
+
+      if (names.length > 50) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: "Error: Maximum 50 icons can be retrieved in a single batch request.",
+            },
+          ],
+          isError: true,
+        };
+      }
+
+      // Validate size if provided
+      if (size !== undefined && (typeof size !== "number" || size <= 0 || size > 4096)) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: "Error: Size must be a positive number between 1 and 4096 pixels.",
+            },
+          ],
+          isError: true,
+        };
+      }
+
       const selectedWeight = weight || config.defaultWeight;
       const results: string[] = [];
 
       for (const name of names) {
         try {
-          const url = `${PHOSPHOR_CORE_RAW_BASE}/${selectedWeight}/${name}.svg`;
-          const response = await fetch(url);
+          // Validate and sanitize each icon name
+          if (!name || typeof name !== "string" || name.trim().length === 0) {
+            results.push(`## ${name}\n❌ Error: Invalid icon name`);
+            continue;
+          }
+
+          const sanitizedName = name.trim().toLowerCase().replace(/[^a-z0-9-]/g, "");
+          const url = `${PHOSPHOR_CORE_RAW_BASE}/${selectedWeight}/${sanitizedName}.svg`;
+          
+          const controller = new AbortController();
+          const timeoutId = setTimeout(() => controller.abort(), 10000);
+          
+          let response: Response;
+          try {
+            response = await fetch(url, {
+              signal: controller.signal,
+              headers: {
+                "User-Agent": "PhosphorIconsMCP/1.0.0",
+              },
+            });
+            clearTimeout(timeoutId);
+          } catch (fetchError) {
+            clearTimeout(timeoutId);
+            if (fetchError instanceof Error && fetchError.name === "AbortError") {
+              results.push(`## ${name}\n❌ Error: Request timeout`);
+              continue;
+            }
+            throw fetchError;
+          }
 
           if (response.ok) {
             let svgContent = await response.text();
@@ -432,18 +646,42 @@ Configure your default weight in the server settings or specify per-request.`;
         iconName: z.string().describe("Name of the icon to implement"),
         framework: z
           .enum(["html", "react", "vue", "svelte", "angular"])
-          .default("react")
-          .describe("Frontend framework"),
+          .optional()
+          .describe("Frontend framework (default: react)"),
       },
     },
     async ({ iconName, framework = "react" }) => {
+      // Validate inputs
+      if (!iconName || typeof iconName !== "string" || iconName.trim().length === 0) {
+        return {
+          messages: [
+            {
+              role: "user",
+              content: {
+                type: "text",
+                text: "Error: Icon name is required and must be a non-empty string.",
+              },
+            },
+          ],
+        };
+      }
+
+      const selectedFramework = framework || "react";
+      const sanitizedIconName = iconName.trim();
+      const iconComponentName = sanitizedIconName
+        .split("-")
+        .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+        .join("");
+
       const guides: Record<string, string> = {
-        html: `To use '${iconName}' in HTML:\n1. Get the SVG using the 'get-icon' tool\n2. Copy the SVG code directly into your HTML\n3. Customize with CSS classes`,
-        react: `To use '${iconName}' in React:\n1. Get the SVG using the 'get-icon' tool\n2. Or install: npm install @phosphor-icons/react\n\nWith package:\nimport { ${iconName.split("-").map(w => w.charAt(0).toUpperCase() + w.slice(1)).join("")} } from '@phosphor-icons/react';\n<${iconName.split("-").map(w => w.charAt(0).toUpperCase() + w.slice(1)).join("")} size={32} weight="bold" />`,
-        vue: `To use '${iconName}' in Vue:\n1. Get the SVG using the 'get-icon' tool\n2. Or install: npm install @phosphor-icons/vue`,
-        svelte: `To use '${iconName}' in Svelte:\n1. Get the SVG using the 'get-icon' tool\n2. Check https://phosphoricons.com for Svelte packages`,
-        angular: `To use '${iconName}' in Angular:\n1. Get the SVG using the 'get-icon' tool\n2. Check https://phosphoricons.com for Angular packages`,
+        html: `To use '${sanitizedIconName}' in HTML:\n1. Get the SVG using the 'get-icon' tool\n2. Copy the SVG code directly into your HTML\n3. Customize with CSS classes`,
+        react: `To use '${sanitizedIconName}' in React:\n1. Get the SVG using the 'get-icon' tool\n2. Or install: npm install @phosphor-icons/react\n\nWith package:\nimport { ${iconComponentName} } from '@phosphor-icons/react';\n<${iconComponentName} size={32} weight="bold" />`,
+        vue: `To use '${sanitizedIconName}' in Vue:\n1. Get the SVG using the 'get-icon' tool\n2. Or install: npm install @phosphor-icons/vue`,
+        svelte: `To use '${sanitizedIconName}' in Svelte:\n1. Get the SVG using the 'get-icon' tool\n2. Check https://phosphoricons.com for Svelte packages`,
+        angular: `To use '${sanitizedIconName}' in Angular:\n1. Get the SVG using the 'get-icon' tool\n2. Check https://phosphoricons.com for Angular packages`,
       };
+
+      const guideText = guides[selectedFramework] || guides.react;
 
       return {
         messages: [
@@ -451,7 +689,7 @@ Configure your default weight in the server settings or specify per-request.`;
             role: "user",
             content: {
               type: "text",
-              text: `Please help me implement the '${iconName}' Phosphor icon in my ${framework} project. ${guides[framework]}`,
+              text: `Please help me implement the '${sanitizedIconName}' Phosphor icon in my ${selectedFramework} project. ${guideText}`,
             },
           },
         ],
