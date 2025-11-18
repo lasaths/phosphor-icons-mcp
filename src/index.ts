@@ -230,12 +230,14 @@ export default function createServer({
           const searchTerm = sanitizedName.toLowerCase();
           const similarIcons = POPULAR_ICONS.filter((icon) => {
             const iconName = icon.name.toLowerCase();
-            // Check if the search term is contained in the icon name or vice versa
+            // Check if the search term is contained in the icon name, vice versa, or in tags
             return (
               iconName.includes(searchTerm) ||
               searchTerm.includes(iconName) ||
               iconName.split('-').some(part => searchTerm.includes(part)) ||
-              searchTerm.split('-').some(part => iconName.includes(part))
+              searchTerm.split('-').some(part => iconName.includes(part)) ||
+              icon.tags?.some(tag => tag.toLowerCase().includes(searchTerm)) ||
+              icon.category?.toLowerCase().includes(searchTerm)
             );
           }).slice(0, 5); // Limit to 5 suggestions
 
@@ -622,7 +624,9 @@ export default function createServer({
                 iconName.includes(searchTerm) ||
                 searchTerm.includes(iconName) ||
                 iconName.split('-').some(part => searchTerm.includes(part)) ||
-                searchTerm.split('-').some(part => iconName.includes(part))
+                searchTerm.split('-').some(part => iconName.includes(part)) ||
+                icon.tags?.some(tag => tag.toLowerCase().includes(searchTerm)) ||
+                icon.category?.toLowerCase().includes(searchTerm)
               );
             }).slice(0, 3);
 
