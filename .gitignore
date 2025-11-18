@@ -6,6 +6,7 @@ dist/
 
 # Build artifacts
 *.tsbuildinfo
+.smithery/
 
 # Test coverage
 coverage/
