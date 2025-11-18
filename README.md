@@ -1,5 +1,7 @@
 # Phosphor Icons MCP Server
 
+[![smithery badge](https://smithery.ai/badge/@lasaths/phosphor-icons-mcp)](https://smithery.ai/server/@lasaths/phosphor-icons-mcp)
+
 A Model Context Protocol (MCP) server that provides access to [Phosphor Icons](https://phosphoricons.com) - a flexible icon family with 6 different weights and over 1,000+ icons.
 
 ## Features
@@ -139,7 +141,7 @@ Get multiple colored icons for a UI:
 ```typescript
 // Get home, user, and settings icons all in blue
 get-multiple-icons({ 
-  names: ["home", "user", "gear"],
+  names: ["home", "user", "settings"],
   weight: "regular",
   color: "#3B82F6",
   size: 24
