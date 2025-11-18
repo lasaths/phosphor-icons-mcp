@@ -1,0 +1,11 @@
+node_modules/
+dist/
+*.log
+.env
+.DS_Store
+
+# Temporary reference files
+AGENTS_REFERENCE.md
+SETUP_COMPLETE.md
+QUICKSTART.md
+CLEANUP_SUMMARY.md

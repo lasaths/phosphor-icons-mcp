@@ -1,0 +1,30 @@
+{
+  "name": "phosphor-icons-mcp",
+  "version": "1.0.0",
+  "description": "MCP server for Phosphor Icons - provides access to beautiful SVG icons with multiple weights",
+  "type": "module",
+  "main": "dist/index.js",
+  "module": "./src/index.ts",
+  "scripts": {
+    "dev": "npx @smithery/cli dev",
+    "build": "tsc"
+  },
+  "keywords": [
+    "mcp",
+    "phosphor-icons",
+    "icons",
+    "svg",
+    "design"
+  ],
+  "author": "Your Name",
+  "license": "MIT",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.22.0",
+    "@smithery/sdk": "^1.7.4",
+    "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "typescript": "^5.7.2"
+  }
+}
