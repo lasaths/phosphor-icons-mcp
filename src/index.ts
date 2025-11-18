@@ -17,6 +17,203 @@ import { z } from "zod";
 const PHOSPHOR_CORE_RAW_BASE = "https://raw.githubusercontent.com/phosphor-icons/core/main/assets";
 
 /**
+ * GitHub API base URL for Phosphor Icons repository
+ */
+const PHOSPHOR_GITHUB_API = "https://api.github.com/repos/phosphor-icons/core/contents";
+
+/**
+ * Cache for all icon names to avoid repeated API calls
+ */
+let allIconsCache: string[] | null = null;
+let allIconsCacheTime: number = 0;
+const CACHE_DURATION = 3600000; // 1 hour in milliseconds
+
+/**
+ * Cache for icon catalog data with categories
+ */
+interface IconCatalogEntry {
+  name: string;
+  categories: string[];
+  tags: string[];
+}
+
+let iconCatalogCache: IconCatalogEntry[] | null = null;
+let iconCatalogCacheTime: number = 0;
+
+/**
+ * Fetches the icon catalog with categories from the Phosphor Icons core package
+ * Fetches from the GitHub repository's source catalog file
+ * 
+ * @returns {Promise<IconCatalogEntry[]>} Array of icon entries with categories
+ */
+async function fetchIconCatalog(): Promise<IconCatalogEntry[]> {
+  // Return cached data if available and fresh
+  const now = Date.now();
+  if (iconCatalogCache && (now - iconCatalogCacheTime) < CACHE_DURATION) {
+    return iconCatalogCache;
+  }
+
+  try {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 20000);
+    
+    // Fetch the catalog from the core repository's source
+    // The catalog.ts file contains the icon definitions with categories
+    const response = await fetch("https://raw.githubusercontent.com/phosphor-icons/core/main/src/catalog.ts", {
+      signal: controller.signal,
+      headers: {
+        "User-Agent": "PhosphorIconsMCP/1.0.0",
+      },
+    });
+    
+    clearTimeout(timeoutId);
+
+    if (!response.ok) {
+      console.warn(`Failed to fetch icon catalog from GitHub: ${response.status}`);
+      iconCatalogCache = [];
+      iconCatalogCacheTime = now;
+      return [];
+    }
+
+    const text = await response.text();
+    
+    // Parse the TypeScript catalog file
+    // The file exports icons as an array with structure:
+    // { name: string, categories: string[], tags: string[], ... }
+    // We'll extract icon entries using regex patterns
+    
+    const catalogEntries: IconCatalogEntry[] = [];
+    
+    // Pattern to match icon entries - look for name, categories, and tags
+    // This is a simplified parser - the actual file structure may vary
+    const iconPattern = /name:\s*["']([^"']+)["'].*?categories:\s*\[([^\]]*)\].*?tags:\s*\[([^\]]*)\]/gs;
+    let match;
+    
+    while ((match = iconPattern.exec(text)) !== null) {
+      const name = match[1];
+      const categoriesStr = match[2] || "";
+      const tagsStr = match[3] || "";
+      
+      // Parse categories and tags (remove quotes and whitespace)
+      const categories = categoriesStr
+        .split(",")
+        .map(cat => cat.trim().replace(/["']/g, ""))
+        .filter(cat => cat.length > 0);
+      
+      const tags = tagsStr
+        .split(",")
+        .map(tag => tag.trim().replace(/["']/g, ""))
+        .filter(tag => tag.length > 0);
+      
+      catalogEntries.push({ name, categories, tags });
+    }
+    
+    // If regex parsing didn't work well, try a different approach
+    // Look for individual icon objects more carefully
+    if (catalogEntries.length === 0) {
+      // Alternative: look for name fields and try to extract nearby categories/tags
+      const nameMatches = text.matchAll(/name:\s*["']([^"']+)["']/g);
+      for (const nameMatch of nameMatches) {
+        const name = nameMatch[1];
+        const startPos = nameMatch.index || 0;
+        const endPos = Math.min(startPos + 500, text.length);
+        const iconBlock = text.substring(startPos, endPos);
+        
+        // Try to find categories and tags in the nearby context
+        const categoriesMatch = iconBlock.match(/categories:\s*\[([^\]]*)\]/);
+        const tagsMatch = iconBlock.match(/tags:\s*\[([^\]]*)\]/);
+        
+        const categories = categoriesMatch 
+          ? categoriesMatch[1]
+              .split(",")
+              .map(cat => cat.trim().replace(/["']/g, ""))
+              .filter(cat => cat.length > 0)
+          : [];
+        
+        const tags = tagsMatch
+          ? tagsMatch[1]
+              .split(",")
+              .map(tag => tag.trim().replace(/["']/g, ""))
+              .filter(tag => tag.length > 0)
+          : [];
+        
+        catalogEntries.push({ name, categories, tags });
+      }
+    }
+
+    iconCatalogCache = catalogEntries;
+    iconCatalogCacheTime = now;
+    return catalogEntries;
+  } catch (error) {
+    console.warn(`Error fetching icon catalog: ${error instanceof Error ? error.message : String(error)}`);
+    iconCatalogCache = [];
+    iconCatalogCacheTime = now;
+    return [];
+  }
+}
+
+/**
+ * Fetches all icon names from the Phosphor Icons GitHub repository
+ * 
+ * @returns {Promise<string[]>} Array of icon names in kebab-case
+ */
+async function fetchAllIconNames(): Promise<string[]> {
+  // Return cached data if available and fresh
+  const now = Date.now();
+  if (allIconsCache && (now - allIconsCacheTime) < CACHE_DURATION) {
+    return allIconsCache;
+  }
+
+  try {
+    // Fetch from the regular weight directory (all weights have the same icons)
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 15000);
+    
+    const response = await fetch(`${PHOSPHOR_GITHUB_API}/assets/regular`, {
+      signal: controller.signal,
+      headers: {
+        "User-Agent": "PhosphorIconsMCP/1.0.0",
+        "Accept": "application/vnd.github.v3+json",
+      },
+    });
+    
+    clearTimeout(timeoutId);
+
+    if (!response.ok) {
+      // If API fails, fall back to popular icons
+      console.warn(`Failed to fetch all icons from GitHub API: ${response.status}`);
+      return POPULAR_ICONS.map(icon => icon.name);
+    }
+
+    const files = await response.json();
+    
+    if (!Array.isArray(files)) {
+      console.warn("Unexpected response format from GitHub API");
+      return POPULAR_ICONS.map(icon => icon.name);
+    }
+
+    // Extract icon names from filenames
+    const iconNames = files
+      .filter((file: any) => file.type === "file" && file.name.endsWith(".svg"))
+      .map((file: any) => {
+        // Remove .svg extension
+        return file.name.replace(/\.svg$/, "");
+      })
+      .sort(); // Sort alphabetically
+
+    // Cache the results
+    allIconsCache = iconNames;
+    allIconsCacheTime = now;
+
+    return iconNames;
+  } catch (error) {
+    console.warn(`Error fetching all icons: ${error instanceof Error ? error.message : String(error)}`);
+    // Fall back to popular icons on error
+    return POPULAR_ICONS.map(icon => icon.name);
+  }
+}
+
+/**
  * Icon metadata interface
  * 
  * @interface IconMetadata
@@ -532,13 +729,40 @@ export default function createServer({
       const searchTerm = query.toLowerCase().trim();
       const safeLimit = Math.min(Math.max(1, Math.floor(limit || 10)), 100);
       
-      const matches = POPULAR_ICONS.filter((icon) => {
+      // Fetch all icons for searching
+      const allIconNames = await fetchAllIconNames();
+      
+      // Create a map of popular icons for metadata
+      const popularIconsMap = new Map(
+        POPULAR_ICONS.map(icon => [icon.name, icon])
+      );
+      
+      // Search through all icons by name first
+      const nameMatches = allIconNames.filter((iconName) => {
+        return iconName.toLowerCase().includes(searchTerm);
+      });
+      
+      // Also search popular icons by category and tags
+      const metadataMatches = POPULAR_ICONS.filter((icon) => {
         return (
-          icon.name.toLowerCase().includes(searchTerm) ||
           icon.category?.toLowerCase().includes(searchTerm) ||
           icon.tags?.some((tag) => tag.toLowerCase().includes(searchTerm))
         );
-      }).slice(0, safeLimit);
+      }).map(icon => icon.name);
+      
+      // Combine and deduplicate matches, prioritizing name matches
+      const allMatches = Array.from(new Set([...nameMatches, ...metadataMatches]));
+      
+      // Sort: popular icons with metadata first, then others
+      const sortedMatches = allMatches.sort((a, b) => {
+        const aIsPopular = popularIconsMap.has(a);
+        const bIsPopular = popularIconsMap.has(b);
+        if (aIsPopular && !bIsPopular) return -1;
+        if (!aIsPopular && bIsPopular) return 1;
+        return a.localeCompare(b);
+      });
+      
+      const matches = sortedMatches.slice(0, safeLimit);
 
       if (matches.length === 0) {
         // Suggest using list-categories to see what's available
@@ -563,16 +787,21 @@ export default function createServer({
       }
 
       const resultText = matches
-        .map((icon) => {
-          const tags = icon.tags?.join(", ") || "none";
-          return `- **${icon.name}** (${icon.category || "general"})\n  Tags: ${tags}`;
+        .map((iconName) => {
+          const popularIcon = popularIconsMap.get(iconName);
+          if (popularIcon) {
+            const tags = popularIcon.tags?.join(", ") || "none";
+            return `- **${iconName}** (${popularIcon.category || "general"})\n  Tags: ${tags}`;
+          } else {
+            return `- **${iconName}** (general)`;
+          }
         })
         .join("\n\n");
 
       // Proactively suggest retrieving icons
-      const exampleIcon = matches[0];
-      const suggestionText = exampleIcon 
-        ? `\n\n**Quick start:** Use \`get-icon\` with name "${exampleIcon.name}" to retrieve the SVG:\n\`get-icon({ name: "${exampleIcon.name}", weight: "regular" })\`\n\nOr retrieve multiple icons at once: \`get-icon({ names: ["${exampleIcon.name}", "star", "heart"] })\`.`
+      const exampleIconName = matches[0];
+      const suggestionText = exampleIconName 
+        ? `\n\n**Quick start:** Use \`get-icon\` with name "${exampleIconName}" to retrieve the SVG:\n\`get-icon({ name: "${exampleIconName}", weight: "regular" })\`\n\nOr retrieve multiple icons at once: \`get-icon({ names: ["${exampleIconName}", "star", "heart"] })\`.`
         : "";
 
       return {
@@ -637,19 +866,84 @@ export default function createServer({
     "phosphor://catalog",
     {
       title: "Phosphor Icons Catalog",
-      description: "Complete catalog of popular Phosphor Icons with metadata",
+      description: "Complete catalog of all Phosphor Icons with metadata",
     },
     async (uri) => {
-      const catalogText = POPULAR_ICONS.map((icon) => {
-        const tags = icon.tags?.join(", ") || "none";
-        return `### ${icon.name}\n- **Category**: ${icon.category || "general"}\n- **Tags**: ${tags}\n- **Weights**: thin, light, regular, bold, fill, duotone`;
-      }).join("\n\n");
+      // Fetch all icon names and catalog data
+      const allIconNames = await fetchAllIconNames();
+      const catalogData = await fetchIconCatalog();
+      
+      // Create maps for quick lookup
+      const catalogMap = new Map(catalogData.map(entry => [entry.name, entry]));
+      const popularIconsMap = new Map(
+        POPULAR_ICONS.map(icon => [icon.name, icon])
+      );
+
+      // Organize icons by category
+      // Icons can have multiple categories, so we'll use the first one for grouping
+      const iconsByCategory = new Map<string, Array<{name: string, tags: string[]}>>();
+      const uncategorizedIcons: Array<{name: string, tags: string[]}> = [];
+
+      for (const iconName of allIconNames) {
+        const catalogEntry = catalogMap.get(iconName);
+        const popularIcon = popularIconsMap.get(iconName);
+        
+        // Use catalog data if available, otherwise fall back to popular icons
+        const categories = catalogEntry?.categories || (popularIcon?.category ? [popularIcon.category] : []);
+        const tags = catalogEntry?.tags || popularIcon?.tags || [];
+        
+        if (categories.length > 0) {
+          // Use the first category for grouping
+          const primaryCategory = categories[0];
+          if (!iconsByCategory.has(primaryCategory)) {
+            iconsByCategory.set(primaryCategory, []);
+          }
+          iconsByCategory.get(primaryCategory)!.push({ name: iconName, tags });
+        } else {
+          uncategorizedIcons.push({ name: iconName, tags });
+        }
+      }
+
+      // Generate catalog text organized by category
+      const categorySections: string[] = [];
+      
+      // Sort categories alphabetically
+      const sortedCategories = Array.from(iconsByCategory.keys()).sort();
+      
+      for (const category of sortedCategories) {
+        const icons = iconsByCategory.get(category)!;
+        const iconList = icons.map(({ name, tags }) => {
+          const tagsStr = tags.length > 0 ? tags.join(", ") : "";
+          return `  - **${name}**${tagsStr ? ` (${tagsStr})` : ""}`;
+        }).join("\n");
+        
+        categorySections.push(`## ${category.charAt(0).toUpperCase() + category.slice(1)}\n\n${iconList}\n`);
+      }
+
+      // Add uncategorized icons if any
+      if (uncategorizedIcons.length > 0) {
+        const uncategorizedList = uncategorizedIcons.map(({ name, tags }) => {
+          const tagsStr = tags.length > 0 ? tags.join(", ") : "";
+          return `  - **${name}**${tagsStr ? ` (${tagsStr})` : ""}`;
+        }).join("\n");
+        categorySections.push(`## General (Uncategorized)\n\n${uncategorizedList}\n`);
+      }
+
+      const catalogText = categorySections.join("\n");
+
+      const catalogCount = catalogData.length;
+      const totalCount = allIconNames.length;
+      const metadataNote = catalogCount > 0 && catalogCount < totalCount
+        ? `\n\n**Note:** ${catalogCount} icons have category metadata from the core package. The remaining ${totalCount - catalogCount} icons are listed under "General (Uncategorized)".`
+        : catalogCount === 0
+        ? `\n\n**Note:** Using fallback categorization from popular icons. ${POPULAR_ICONS.length} icons have detailed metadata.`
+        : "";
 
       return {
         contents: [
           {
             uri: uri.href,
-            text: `# Phosphor Icons Catalog\n\n${POPULAR_ICONS.length} Popular Icons\n\n${catalogText}\n\n---\n\nFull catalog: https://phosphoricons.com\nGitHub: https://github.com/phosphor-icons/core`,
+            text: `# Phosphor Icons Catalog\n\n**Total Icons: ${totalCount}**\n\nIcons organized by category:\n\n${catalogText}${metadataNote}\n\n---\n\nFull catalog: https://phosphoricons.com\nGitHub: https://github.com/phosphor-icons/core`,
             mimeType: "text/markdown",
           },
         ],
