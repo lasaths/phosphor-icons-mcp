@@ -122,6 +122,10 @@ export default function createServer({
       title: "Get Phosphor Icon",
       description:
         "Retrieve an SVG icon from Phosphor Icons library. Returns the SVG content with specified weight/style and optional color.",
+      annotations: {
+        category: "icon-retrieval",
+        usage: "primary",
+      },
       inputSchema: {
         name: z
           .string()
@@ -340,6 +344,10 @@ export default function createServer({
       title: "Search Phosphor Icons",
       description:
         "Search for icons by name, category, or tags. Returns a list of matching icons.",
+      annotations: {
+        category: "icon-discovery",
+        usage: "primary",
+      },
       inputSchema: {
         query: z
           .string()
@@ -439,6 +447,10 @@ export default function createServer({
     {
       title: "List Icon Categories",
       description: "Get a list of all icon categories available in Phosphor Icons.",
+      annotations: {
+        category: "icon-discovery",
+        usage: "secondary",
+      },
       inputSchema: {},
     },
     async () => {
@@ -485,10 +497,14 @@ export default function createServer({
       title: "Get Multiple Icons",
       description:
         "Retrieve multiple SVG icons at once. Useful for batch operations.",
+      annotations: {
+        category: "icon-retrieval",
+        usage: "primary",
+      },
       inputSchema: {
         names: z
           .array(z.string())
-          .describe("Array of icon names in kebab-case"),
+          .describe("Array of icon names in kebab-case (e.g., ['heart', 'star', 'user'])"),
         weight: z
           .enum(["thin", "light", "regular", "bold", "fill", "duotone"])
           .optional()
@@ -497,12 +513,12 @@ export default function createServer({
           .string()
           .optional()
           .describe(
-            "Icon color applied to all icons. Accepts hex codes, RGB, named colors, or 'currentColor'"
+            "Icon color applied to all icons. Accepts hex codes (#000000), RGB (rgb(0,0,0)), named colors (red, blue), or 'currentColor'. Default: currentColor"
           ),
         size: z
           .number()
           .optional()
-          .describe("Icon size in pixels applied to all icons"),
+          .describe("Icon size in pixels applied to all icons (sets both width and height). Default: 256"),
       },
     },
     async ({ names, weight, color, size }) => {

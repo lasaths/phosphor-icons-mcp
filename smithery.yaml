@@ -5,3 +5,13 @@ build:
 startCommand:
   type: http
   command: node dist/index.js
+config:
+  schema:
+    type: object
+    properties:
+      defaultWeight:
+        type: string
+        enum: ["thin", "light", "regular", "bold", "fill", "duotone"]
+        default: "regular"
+        description: "Default icon weight/style to use when not specified in tool calls"
+    additionalProperties: false
