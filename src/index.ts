@@ -1,8 +1,226 @@
+/**
+ * Phosphor Icons MCP Server
+ * 
+ * A Model Context Protocol server that provides seamless access to Phosphor Icons,
+ * a flexible icon family with 6 different weights and 1,400+ beautiful icons.
+ * 
+ * @module PhosphorIconsMCP
+ * @version 1.0.0
+ */
+
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 
+/**
+ * Base URL for fetching Phosphor Icons from GitHub
+ */
 const PHOSPHOR_CORE_RAW_BASE = "https://raw.githubusercontent.com/phosphor-icons/core/main/assets";
 
+/**
+ * GitHub API base URL for Phosphor Icons repository
+ */
+const PHOSPHOR_GITHUB_API = "https://api.github.com/repos/phosphor-icons/core/contents";
+
+/**
+ * Cache for all icon names to avoid repeated API calls
+ */
+let allIconsCache: string[] | null = null;
+let allIconsCacheTime: number = 0;
+const CACHE_DURATION = 3600000; // 1 hour in milliseconds
+
+/**
+ * Cache for icon catalog data with categories
+ */
+interface IconCatalogEntry {
+  name: string;
+  categories: string[];
+  tags: string[];
+}
+
+let iconCatalogCache: IconCatalogEntry[] | null = null;
+let iconCatalogCacheTime: number = 0;
+
+/**
+ * Fetches the icon catalog with categories from the Phosphor Icons core package
+ * Fetches from the GitHub repository's source catalog file
+ * 
+ * @returns {Promise<IconCatalogEntry[]>} Array of icon entries with categories
+ */
+async function fetchIconCatalog(): Promise<IconCatalogEntry[]> {
+  // Return cached data if available and fresh
+  const now = Date.now();
+  if (iconCatalogCache && (now - iconCatalogCacheTime) < CACHE_DURATION) {
+    return iconCatalogCache;
+  }
+
+  try {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 20000);
+    
+    // Fetch the catalog from the core repository's source
+    // The catalog.ts file contains the icon definitions with categories
+    const response = await fetch("https://raw.githubusercontent.com/phosphor-icons/core/main/src/catalog.ts", {
+      signal: controller.signal,
+      headers: {
+        "User-Agent": "PhosphorIconsMCP/1.0.0",
+      },
+    });
+    
+    clearTimeout(timeoutId);
+
+    if (!response.ok) {
+      console.warn(`Failed to fetch icon catalog from GitHub: ${response.status}`);
+      iconCatalogCache = [];
+      iconCatalogCacheTime = now;
+      return [];
+    }
+
+    const text = await response.text();
+    
+    // Parse the TypeScript catalog file
+    // The file exports icons as an array with structure:
+    // { name: string, categories: string[], tags: string[], ... }
+    // We'll extract icon entries using regex patterns
+    
+    const catalogEntries: IconCatalogEntry[] = [];
+    
+    // Pattern to match icon entries - look for name, categories, and tags
+    // This is a simplified parser - the actual file structure may vary
+    const iconPattern = /name:\s*["']([^"']+)["'].*?categories:\s*\[([^\]]*)\].*?tags:\s*\[([^\]]*)\]/gs;
+    let match;
+    
+    while ((match = iconPattern.exec(text)) !== null) {
+      const name = match[1];
+      const categoriesStr = match[2] || "";
+      const tagsStr = match[3] || "";
+      
+      // Parse categories and tags (remove quotes and whitespace)
+      const categories = categoriesStr
+        .split(",")
+        .map(cat => cat.trim().replace(/["']/g, ""))
+        .filter(cat => cat.length > 0);
+      
+      const tags = tagsStr
+        .split(",")
+        .map(tag => tag.trim().replace(/["']/g, ""))
+        .filter(tag => tag.length > 0);
+      
+      catalogEntries.push({ name, categories, tags });
+    }
+    
+    // If regex parsing didn't work well, try a different approach
+    // Look for individual icon objects more carefully
+    if (catalogEntries.length === 0) {
+      // Alternative: look for name fields and try to extract nearby categories/tags
+      const nameMatches = text.matchAll(/name:\s*["']([^"']+)["']/g);
+      for (const nameMatch of nameMatches) {
+        const name = nameMatch[1];
+        const startPos = nameMatch.index || 0;
+        const endPos = Math.min(startPos + 500, text.length);
+        const iconBlock = text.substring(startPos, endPos);
+        
+        // Try to find categories and tags in the nearby context
+        const categoriesMatch = iconBlock.match(/categories:\s*\[([^\]]*)\]/);
+        const tagsMatch = iconBlock.match(/tags:\s*\[([^\]]*)\]/);
+        
+        const categories = categoriesMatch 
+          ? categoriesMatch[1]
+              .split(",")
+              .map(cat => cat.trim().replace(/["']/g, ""))
+              .filter(cat => cat.length > 0)
+          : [];
+        
+        const tags = tagsMatch
+          ? tagsMatch[1]
+              .split(",")
+              .map(tag => tag.trim().replace(/["']/g, ""))
+              .filter(tag => tag.length > 0)
+          : [];
+        
+        catalogEntries.push({ name, categories, tags });
+      }
+    }
+
+    iconCatalogCache = catalogEntries;
+    iconCatalogCacheTime = now;
+    return catalogEntries;
+  } catch (error) {
+    console.warn(`Error fetching icon catalog: ${error instanceof Error ? error.message : String(error)}`);
+    iconCatalogCache = [];
+    iconCatalogCacheTime = now;
+    return [];
+  }
+}
+
+/**
+ * Fetches all icon names from the Phosphor Icons GitHub repository
+ * 
+ * @returns {Promise<string[]>} Array of icon names in kebab-case
+ */
+async function fetchAllIconNames(): Promise<string[]> {
+  // Return cached data if available and fresh
+  const now = Date.now();
+  if (allIconsCache && (now - allIconsCacheTime) < CACHE_DURATION) {
+    return allIconsCache;
+  }
+
+  try {
+    // Fetch from the regular weight directory (all weights have the same icons)
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 15000);
+    
+    const response = await fetch(`${PHOSPHOR_GITHUB_API}/assets/regular`, {
+      signal: controller.signal,
+      headers: {
+        "User-Agent": "PhosphorIconsMCP/1.0.0",
+        "Accept": "application/vnd.github.v3+json",
+      },
+    });
+    
+    clearTimeout(timeoutId);
+
+    if (!response.ok) {
+      // If API fails, fall back to popular icons
+      console.warn(`Failed to fetch all icons from GitHub API: ${response.status}`);
+      return POPULAR_ICONS.map(icon => icon.name);
+    }
+
+    const files = await response.json();
+    
+    if (!Array.isArray(files)) {
+      console.warn("Unexpected response format from GitHub API");
+      return POPULAR_ICONS.map(icon => icon.name);
+    }
+
+    // Extract icon names from filenames
+    const iconNames = files
+      .filter((file: any) => file.type === "file" && file.name.endsWith(".svg"))
+      .map((file: any) => {
+        // Remove .svg extension
+        return file.name.replace(/\.svg$/, "");
+      })
+      .sort(); // Sort alphabetically
+
+    // Cache the results
+    allIconsCache = iconNames;
+    allIconsCacheTime = now;
+
+    return iconNames;
+  } catch (error) {
+    console.warn(`Error fetching all icons: ${error instanceof Error ? error.message : String(error)}`);
+    // Fall back to popular icons on error
+    return POPULAR_ICONS.map(icon => icon.name);
+  }
+}
+
+/**
+ * Icon metadata interface
+ * 
+ * @interface IconMetadata
+ * @property {string} name - Icon name in kebab-case
+ * @property {string} [category] - Optional category classification
+ * @property {string[]} [tags] - Optional array of descriptive tags
+ */
 interface IconMetadata {
   name: string;
   category?: string;
@@ -33,7 +251,7 @@ const POPULAR_ICONS: IconMetadata[] = [
   { name: "folder", category: "files", tags: ["directory", "collection", "organize"] },
   { name: "gear", category: "interface", tags: ["settings", "config", "preferences"] },
   { name: "heart", category: "social", tags: ["like", "favorite", "love"] },
-  { name: "home", category: "interface", tags: ["house", "main", "dashboard"] },
+  { name: "house", category: "interface", tags: ["home", "main", "dashboard"] },
   { name: "image", category: "media", tags: ["picture", "photo", "gallery"] },
   { name: "info", category: "interface", tags: ["information", "help", "about"] },
   { name: "link", category: "interface", tags: ["chain", "url", "hyperlink"] },
@@ -57,6 +275,13 @@ const POPULAR_ICONS: IconMetadata[] = [
   { name: "x", category: "interface", tags: ["close", "cancel", "remove"] },
 ];
 
+/**
+ * Server configuration schema
+ * 
+ * Defines the configuration options available for the MCP server.
+ * 
+ * @type {z.ZodObject}
+ */
 export const configSchema = z.object({
   defaultWeight: z
     .enum(["thin", "light", "regular", "bold", "fill", "duotone"])
@@ -64,6 +289,20 @@ export const configSchema = z.object({
     .describe("Default icon weight/style"),
 });
 
+/**
+ * Creates and configures the Phosphor Icons MCP server
+ * 
+ * @param {Object} options - Server configuration options
+ * @param {z.infer<typeof configSchema>} options.config - Server configuration
+ * @returns {Promise<McpServer>} Configured MCP server instance
+ * 
+ * @example
+ * ```typescript
+ * const server = createServer({
+ *   config: { defaultWeight: "bold" }
+ * });
+ * ```
+ */
 export default function createServer({
   config,
 }: {
@@ -77,14 +316,21 @@ export default function createServer({
   server.registerTool(
     "get-icon",
     {
-      title: "Get Phosphor Icon",
+      title: "Get Phosphor Icon(s)",
       description:
-        "Retrieve an SVG icon from Phosphor Icons library. Returns the SVG content with specified weight/style and optional color.",
+        "Retrieve one or more SVG icons from Phosphor Icons library. Provide either a single icon name or an array of names for batch retrieval. Returns SVG content with specified weight/style and optional color.",
       inputSchema: {
         name: z
           .string()
+          .optional()
           .describe(
-            "Icon name in kebab-case (e.g., 'arrow-left', 'magnifying-glass', 'user')"
+            "Single icon name in kebab-case (e.g., 'arrow-left', 'magnifying-glass', 'user'). Use this for a single icon, or use 'names' for multiple icons."
+          ),
+        names: z
+          .array(z.string())
+          .optional()
+          .describe(
+            "Array of icon names in kebab-case (e.g., ['heart', 'star', 'user']). Use this for multiple icons, or use 'name' for a single icon. Maximum 50 icons."
           ),
         weight: z
           .enum(["thin", "light", "regular", "bold", "fill", "duotone"])
@@ -104,66 +350,331 @@ export default function createServer({
           .describe("Icon size in pixels (sets both width and height). Default: 256"),
       },
     },
-    async ({ name, weight, color, size }) => {
+    async ({ name, names, weight, color, size }) => {
       try {
-        const selectedWeight = weight || config.defaultWeight;
-        const url = `${PHOSPHOR_CORE_RAW_BASE}/${selectedWeight}/${name}.svg`;
+        // Determine if single or multiple icons
+        const isMultiple = names !== undefined;
+        const iconNames = isMultiple ? names : (name ? [name] : []);
 
-        const response = await fetch(url);
-        
-        if (!response.ok) {
+        // Validate inputs - ensure only one method is used
+        if (name !== undefined && names !== undefined) {
           return {
             content: [
               {
                 type: "text",
-                text: `Error: Icon '${name}' not found with weight '${selectedWeight}'. Please check the icon name and weight. Icon names should be in kebab-case (e.g., 'arrow-left', 'user-circle').`,
+                text: "Error: Provide either 'name' (for single icon) or 'names' (for multiple icons), but not both.",
               },
             ],
             isError: true,
           };
         }
 
-        let svgContent = await response.text();
+        if (!isMultiple && (!name || typeof name !== "string" || name.trim().length === 0)) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: "Error: Either 'name' (for single icon) or 'names' (for multiple icons) must be provided.",
+              },
+            ],
+            isError: true,
+          };
+        }
 
-        // Apply color if specified
-        if (color) {
-          // For fill weight, replace fill attributes
-          if (selectedWeight === "fill") {
-            svgContent = svgContent.replace(/fill="[^"]*"/g, `fill="${color}"`);
+        if (isMultiple) {
+          if (!Array.isArray(names) || names.length === 0) {
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: "Error: 'names' must be a non-empty array of icon names.",
+                },
+              ],
+              isError: true,
+            };
           }
-          // For other weights, replace stroke attributes
-          else if (selectedWeight === "duotone") {
-            // Duotone has both fill and stroke - replace both
-            svgContent = svgContent.replace(/fill="[^"]*"/g, `fill="${color}"`);
-            svgContent = svgContent.replace(/stroke="[^"]*"/g, `stroke="${color}"`);
-          } else {
-            svgContent = svgContent.replace(/stroke="[^"]*"/g, `stroke="${color}"`);
+
+          if (names.length > 50) {
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: "Error: Maximum 50 icons can be retrieved in a single batch request.",
+                },
+              ],
+              isError: true,
+            };
           }
         }
 
-        // Apply size if specified
-        if (size) {
-          svgContent = svgContent.replace(/width="[^"]*"/, `width="${size}"`);
-          svgContent = svgContent.replace(/height="[^"]*"/, `height="${size}"`);
+        // Validate size if provided
+        if (size !== undefined && (typeof size !== "number" || size <= 0 || size > 4096)) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: "Error: Size must be a positive number between 1 and 4096 pixels.",
+              },
+            ],
+            isError: true,
+          };
         }
 
-        const colorInfo = color ? ` with color '${color}'` : "";
-        const sizeInfo = size ? ` at ${size}px` : "";
+        const selectedWeight = weight || config.defaultWeight;
+
+        // Handle single icon
+        if (!isMultiple) {
+          const iconName = name!;
+          // Sanitize icon name to prevent path traversal
+          const sanitizedName = iconName.trim().toLowerCase().replace(/[^a-z0-9-]/g, "");
+          if (sanitizedName !== iconName.toLowerCase()) {
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: `Error: Invalid icon name '${iconName}'. Icon names must be in kebab-case and contain only lowercase letters, numbers, and hyphens (e.g., 'arrow-left', 'user-circle').`,
+                },
+              ],
+              isError: true,
+            };
+          }
+
+          // File naming: regular icons have no suffix, other weights have -{weight} suffix
+          const fileName = selectedWeight === "regular" 
+            ? `${sanitizedName}.svg`
+            : `${sanitizedName}-${selectedWeight}.svg`;
+          const url = `${PHOSPHOR_CORE_RAW_BASE}/${selectedWeight}/${fileName}`;
+
+          // Fetch icon with timeout
+          const controller = new AbortController();
+          const timeoutId = setTimeout(() => controller.abort(), 10000);
+
+          let response: Response;
+          try {
+            response = await fetch(url, {
+              signal: controller.signal,
+              headers: {
+                "User-Agent": "PhosphorIconsMCP/1.0.0",
+              },
+            });
+            clearTimeout(timeoutId);
+          } catch (fetchError) {
+            clearTimeout(timeoutId);
+            if (fetchError instanceof Error && fetchError.name === "AbortError") {
+              return {
+                content: [
+                  {
+                    type: "text",
+                    text: "Error: Request timeout. The icon service may be temporarily unavailable.",
+                  },
+                ],
+                isError: true,
+              };
+            }
+            throw fetchError;
+          }
+          
+          if (!response.ok) {
+            // Search for similar icons in the catalog to suggest alternatives
+            const searchTerm = sanitizedName.toLowerCase();
+            const similarIcons = POPULAR_ICONS.filter((icon) => {
+              const iconName = icon.name.toLowerCase();
+              return (
+                iconName.includes(searchTerm) ||
+                searchTerm.includes(iconName) ||
+                iconName.split('-').some(part => searchTerm.includes(part)) ||
+                searchTerm.split('-').some(part => iconName.includes(part)) ||
+                icon.tags?.some(tag => tag.toLowerCase().includes(searchTerm)) ||
+                icon.category?.toLowerCase().includes(searchTerm)
+              );
+            }).slice(0, 5);
+
+            let suggestionText = "";
+            if (similarIcons.length > 0) {
+              const suggestions = similarIcons
+                .map((icon) => `- **${icon.name}** (${icon.category || "general"})`)
+                .join("\n");
+              suggestionText = `\n\n**Similar icons found in catalog:**\n${suggestions}\n\nTry using the 'search-icons' tool with "${sanitizedName}" to find more options, or use 'list-categories' to browse available icons.`;
+            } else {
+              suggestionText = `\n\n**Suggestions:**\n- Use the 'search-icons' tool with "${sanitizedName}" to find similar icons\n- Use 'list-categories' to browse available icon categories\n- Check the full catalog at https://phosphoricons.com`;
+            }
+
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: `Error: Icon '${sanitizedName}' not found with weight '${selectedWeight}'.${suggestionText}\n\nIcon names should be in kebab-case (e.g., 'arrow-left', 'user-circle'). Available weights: thin, light, regular, bold, fill, duotone.`,
+                },
+              ],
+              isError: true,
+            };
+          }
+
+          let svgContent = await response.text();
+          
+          // Validate SVG content
+          if (!svgContent || !svgContent.trim().startsWith("<svg")) {
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: "Error: Invalid SVG content received from the icon service.",
+                },
+              ],
+              isError: true,
+            };
+          }
+
+          // Apply color if specified
+          if (color) {
+            if (selectedWeight === "fill") {
+              svgContent = svgContent.replace(/fill="[^"]*"/g, `fill="${color}"`);
+            } else if (selectedWeight === "duotone") {
+              svgContent = svgContent.replace(/fill="[^"]*"/g, `fill="${color}"`);
+              svgContent = svgContent.replace(/stroke="[^"]*"/g, `stroke="${color}"`);
+            } else {
+              svgContent = svgContent.replace(/fill="[^"]*"/g, `fill="${color}"`);
+              svgContent = svgContent.replace(/stroke="[^"]*"/g, `stroke="${color}"`);
+            }
+          }
+
+          // Apply size if specified
+          if (size) {
+            if (!svgContent.includes('width=')) {
+              svgContent = svgContent.replace(/<svg([^>]*)>/, `<svg$1 width="${size}" height="${size}">`);
+            } else {
+              svgContent = svgContent.replace(/width="[^"]*"/, `width="${size}"`);
+              svgContent = svgContent.replace(/height="[^"]*"/, `height="${size}"`);
+            }
+          }
+
+          const colorInfo = color ? ` with color '${color}'` : "";
+          const sizeInfo = size ? ` at ${size}px` : "";
+
+          return {
+            content: [
+              {
+                type: "text",
+                text: `# ${iconName} (${selectedWeight}${colorInfo}${sizeInfo})\n\n\`\`\`svg\n${svgContent}\n\`\`\`\n\nYou can use this SVG directly in your HTML or React components.`,
+              },
+            ],
+          };
+        }
+
+        // Handle multiple icons
+        const results: string[] = [];
+
+        for (const iconName of iconNames) {
+          try {
+            // Validate and sanitize each icon name
+            if (!iconName || typeof iconName !== "string" || iconName.trim().length === 0) {
+              results.push(`## ${iconName}\n❌ Error: Invalid icon name`);
+              continue;
+            }
+
+            const sanitizedName = iconName.trim().toLowerCase().replace(/[^a-z0-9-]/g, "");
+            const fileName = selectedWeight === "regular" 
+              ? `${sanitizedName}.svg`
+              : `${sanitizedName}-${selectedWeight}.svg`;
+            const url = `${PHOSPHOR_CORE_RAW_BASE}/${selectedWeight}/${fileName}`;
+            
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 10000);
+            
+            let response: Response;
+            try {
+              response = await fetch(url, {
+                signal: controller.signal,
+                headers: {
+                  "User-Agent": "PhosphorIconsMCP/1.0.0",
+                },
+              });
+              clearTimeout(timeoutId);
+            } catch (fetchError) {
+              clearTimeout(timeoutId);
+              if (fetchError instanceof Error && fetchError.name === "AbortError") {
+                results.push(`## ${iconName}\n❌ Error: Request timeout`);
+                continue;
+              }
+              throw fetchError;
+            }
+
+            if (response.ok) {
+              let svgContent = await response.text();
+
+              // Apply color if specified
+              if (color) {
+                if (selectedWeight === "fill") {
+                  svgContent = svgContent.replace(/fill="[^"]*"/g, `fill="${color}"`);
+                } else if (selectedWeight === "duotone") {
+                  svgContent = svgContent.replace(/fill="[^"]*"/g, `fill="${color}"`);
+                  svgContent = svgContent.replace(/stroke="[^"]*"/g, `stroke="${color}"`);
+                } else {
+                  svgContent = svgContent.replace(/fill="[^"]*"/g, `fill="${color}"`);
+                  svgContent = svgContent.replace(/stroke="[^"]*"/g, `stroke="${color}"`);
+                }
+              }
+
+              // Apply size if specified
+              if (size) {
+                if (!svgContent.includes('width=')) {
+                  svgContent = svgContent.replace(/<svg([^>]*)>/, `<svg$1 width="${size}" height="${size}">`);
+                } else {
+                  svgContent = svgContent.replace(/width="[^"]*"/, `width="${size}"`);
+                  svgContent = svgContent.replace(/height="[^"]*"/, `height="${size}"`);
+                }
+              }
+
+              results.push(`## ${iconName}\n\`\`\`svg\n${svgContent}\n\`\`\``);
+            } else {
+              // Search for similar icons to suggest alternatives
+              const searchTerm = sanitizedName.toLowerCase();
+              const similarIcons = POPULAR_ICONS.filter((icon) => {
+                const iconName = icon.name.toLowerCase();
+                return (
+                  iconName.includes(searchTerm) ||
+                  searchTerm.includes(iconName) ||
+                  iconName.split('-').some(part => searchTerm.includes(part)) ||
+                  searchTerm.split('-').some(part => iconName.includes(part)) ||
+                  icon.tags?.some(tag => tag.toLowerCase().includes(searchTerm)) ||
+                  icon.category?.toLowerCase().includes(searchTerm)
+                );
+              }).slice(0, 3);
+
+              let suggestionText = "";
+              if (similarIcons.length > 0) {
+                const suggestions = similarIcons
+                  .map((icon) => `- ${icon.name}`)
+                  .join(", ");
+                suggestionText = ` (Similar: ${suggestions})`;
+              }
+              results.push(`## ${iconName}\n❌ Not found${suggestionText}`);
+            }
+          } catch (error) {
+            results.push(
+              `## ${iconName}\n❌ Error: ${error instanceof Error ? error.message : String(error)}`
+            );
+          }
+        }
+
+        const colorInfo = color ? ` • Color: ${color}` : "";
+        const sizeInfo = size ? ` • Size: ${size}px` : "";
 
         return {
           content: [
             {
               type: "text",
-              text: `# ${name} (${selectedWeight}${colorInfo}${sizeInfo})\n\n\`\`\`svg\n${svgContent}\n\`\`\`\n\nYou can use this SVG directly in your HTML or React components.`,
+              text: `# Batch Icon Results (${selectedWeight}${colorInfo}${sizeInfo})\n\n${results.join("\n\n")}`,
             },
           ],
         };
       } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : String(error);
         return {
           content: [
             {
               type: "text",
-              text: `Error fetching icon: ${error instanceof Error ? error.message : String(error)}`,
+              text: `Error fetching icon: ${errorMessage}. Please verify the icon name and try again.`,
             },
           ],
           isError: true,
@@ -190,39 +701,114 @@ export default function createServer({
       },
     },
     async ({ query, limit = 10 }) => {
-      const searchTerm = query.toLowerCase();
-      
-      const matches = POPULAR_ICONS.filter((icon) => {
-        return (
-          icon.name.toLowerCase().includes(searchTerm) ||
-          icon.category?.toLowerCase().includes(searchTerm) ||
-          icon.tags?.some((tag) => tag.toLowerCase().includes(searchTerm))
-        );
-      }).slice(0, limit);
-
-      if (matches.length === 0) {
+      // Validate inputs
+      if (!query || typeof query !== "string" || query.trim().length === 0) {
         return {
           content: [
             {
               type: "text",
-              text: `No icons found matching "${query}". Try different keywords or check the full catalog at https://phosphoricons.com`,
+              text: "Error: Search query is required and must be a non-empty string.",
+            },
+          ],
+          isError: true,
+        };
+      }
+
+      if (limit !== undefined && (typeof limit !== "number" || limit <= 0 || limit > 100)) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: "Error: Limit must be a positive number between 1 and 100.",
+            },
+          ],
+          isError: true,
+        };
+      }
+
+      const searchTerm = query.toLowerCase().trim();
+      const safeLimit = Math.min(Math.max(1, Math.floor(limit || 10)), 100);
+      
+      // Fetch all icons for searching
+      const allIconNames = await fetchAllIconNames();
+      
+      // Create a map of popular icons for metadata
+      const popularIconsMap = new Map(
+        POPULAR_ICONS.map(icon => [icon.name, icon])
+      );
+      
+      // Search through all icons by name first
+      const nameMatches = allIconNames.filter((iconName) => {
+        return iconName.toLowerCase().includes(searchTerm);
+      });
+      
+      // Also search popular icons by category and tags
+      const metadataMatches = POPULAR_ICONS.filter((icon) => {
+        return (
+          icon.category?.toLowerCase().includes(searchTerm) ||
+          icon.tags?.some((tag) => tag.toLowerCase().includes(searchTerm))
+        );
+      }).map(icon => icon.name);
+      
+      // Combine and deduplicate matches, prioritizing name matches
+      const allMatches = Array.from(new Set([...nameMatches, ...metadataMatches]));
+      
+      // Sort: popular icons with metadata first, then others
+      const sortedMatches = allMatches.sort((a, b) => {
+        const aIsPopular = popularIconsMap.has(a);
+        const bIsPopular = popularIconsMap.has(b);
+        if (aIsPopular && !bIsPopular) return -1;
+        if (!aIsPopular && bIsPopular) return 1;
+        return a.localeCompare(b);
+      });
+      
+      const matches = sortedMatches.slice(0, safeLimit);
+
+      if (matches.length === 0) {
+        // Suggest using list-categories to see what's available
+        const categories = Array.from(
+          new Set(
+            POPULAR_ICONS.map((icon) => icon.category).filter(
+              (cat): cat is string => cat !== undefined
+            )
+          )
+        ).sort();
+        
+        const categoryList = categories.slice(0, 5).join(", ");
+        
+        return {
+          content: [
+            {
+              type: "text",
+              text: `No icons found matching "${query}".\n\n**Available options:**\n- Use 'list-categories' to see all icon categories (${categories.length} categories available, e.g., ${categoryList})\n- Try different search keywords\n- Check the full catalog at https://phosphoricons.com\n\n**Tip:** Use 'list-categories' first to see what's available, then search within specific categories.`,
             },
           ],
         };
       }
 
       const resultText = matches
-        .map((icon) => {
-          const tags = icon.tags?.join(", ") || "none";
-          return `- **${icon.name}** (${icon.category || "general"})\n  Tags: ${tags}`;
+        .map((iconName) => {
+          const popularIcon = popularIconsMap.get(iconName);
+          if (popularIcon) {
+            const tags = popularIcon.tags?.join(", ") || "none";
+            return `- **${iconName}** (${popularIcon.category || "general"})\n  Tags: ${tags}`;
+          } else {
+            return `- **${iconName}** (general)`;
+          }
         })
         .join("\n\n");
+
+      // Proactively suggest retrieving icons
+      const exampleIconName = matches[0];
+      const suggestionText = exampleIconName 
+        ? `\n\n**Quick start:** Use \`get-icon\` with name "${exampleIconName}" to retrieve the SVG:\n\`get-icon({ name: "${exampleIconName}", weight: "regular" })\`\n\nOr retrieve multiple icons at once: \`get-icon({ names: ["${exampleIconName}", "star", "heart"] })\`.`
+        : "";
 
       return {
         content: [
           {
             type: "text",
-            text: `Found ${matches.length} icon(s) matching "${query}":\n\n${resultText}\n\nUse the 'get-icon' tool with the icon name to retrieve the SVG.`,
+            text: `Found ${matches.length} icon(s) matching "${query}":\n\n${resultText}${suggestionText}\n\nUse the 'get-icon' tool with any icon name above to retrieve the SVG.`,
           },
         ],
       };
@@ -250,120 +836,114 @@ export default function createServer({
           const count = POPULAR_ICONS.filter(
             (icon) => icon.category === cat
           ).length;
-          return `- **${cat}**: ${count} icon(s)`;
+          const exampleIcon = POPULAR_ICONS.find(icon => icon.category === cat);
+          const example = exampleIcon ? ` (e.g., ${exampleIcon.name})` : "";
+          return `- **${cat}**: ${count} icon(s)${example}`;
         })
         .join("\n");
 
+      const exampleCategory = categories[0];
+      const exampleIcons = POPULAR_ICONS
+        .filter(icon => icon.category === exampleCategory)
+        .slice(0, 3)
+        .map(icon => icon.name)
+        .join(", ");
+
       return {
         content: [
           {
             type: "text",
-            text: `# Phosphor Icons Categories\n\n${categoryList}\n\nUse 'search-icons' with a category name to find icons in that category.`,
+            text: `# Phosphor Icons Categories\n\n${categoryList}\n\n**Next steps:**\n- Use 'search-icons' with a category name (e.g., "${exampleCategory}") to find icons in that category\n- Use 'search-icons' with an icon name (e.g., "${exampleIcons}") to find specific icons\n- Use 'get-icon' with any icon name to retrieve the SVG\n\n**Example:** \`search-icons({ query: "${exampleCategory}" })\` to see all ${exampleCategory} icons.`,
           },
         ],
       };
     }
   );
 
-  server.registerTool(
-    "get-multiple-icons",
-    {
-      title: "Get Multiple Icons",
-      description:
-        "Retrieve multiple SVG icons at once. Useful for batch operations.",
-      inputSchema: {
-        names: z
-          .array(z.string())
-          .describe("Array of icon names in kebab-case"),
-        weight: z
-          .enum(["thin", "light", "regular", "bold", "fill", "duotone"])
-          .optional()
-          .describe(`Icon weight/style for all icons. Defaults to ${config.defaultWeight}`),
-        color: z
-          .string()
-          .optional()
-          .describe(
-            "Icon color applied to all icons. Accepts hex codes, RGB, named colors, or 'currentColor'"
-          ),
-        size: z
-          .number()
-          .optional()
-          .describe("Icon size in pixels applied to all icons"),
-      },
-    },
-    async ({ names, weight, color, size }) => {
-      const selectedWeight = weight || config.defaultWeight;
-      const results: string[] = [];
-
-      for (const name of names) {
-        try {
-          const url = `${PHOSPHOR_CORE_RAW_BASE}/${selectedWeight}/${name}.svg`;
-          const response = await fetch(url);
-
-          if (response.ok) {
-            let svgContent = await response.text();
-
-            // Apply color if specified
-            if (color) {
-              if (selectedWeight === "fill") {
-                svgContent = svgContent.replace(/fill="[^"]*"/g, `fill="${color}"`);
-              } else if (selectedWeight === "duotone") {
-                svgContent = svgContent.replace(/fill="[^"]*"/g, `fill="${color}"`);
-                svgContent = svgContent.replace(/stroke="[^"]*"/g, `stroke="${color}"`);
-              } else {
-                svgContent = svgContent.replace(/stroke="[^"]*"/g, `stroke="${color}"`);
-              }
-            }
-
-            // Apply size if specified
-            if (size) {
-              svgContent = svgContent.replace(/width="[^"]*"/, `width="${size}"`);
-              svgContent = svgContent.replace(/height="[^"]*"/, `height="${size}"`);
-            }
-
-            results.push(`## ${name}\n\`\`\`svg\n${svgContent}\n\`\`\``);
-          } else {
-            results.push(`## ${name}\n❌ Not found`);
-          }
-        } catch (error) {
-          results.push(
-            `## ${name}\n❌ Error: ${error instanceof Error ? error.message : String(error)}`
-          );
-        }
-      }
-
-      const colorInfo = color ? ` • Color: ${color}` : "";
-      const sizeInfo = size ? ` • Size: ${size}px` : "";
-
-      return {
-        content: [
-          {
-            type: "text",
-            text: `# Batch Icon Results (${selectedWeight}${colorInfo}${sizeInfo})\n\n${results.join("\n\n")}`,
-          },
-        ],
-      };
-    }
-  );
 
   server.registerResource(
     "icon-catalog",
     "phosphor://catalog",
     {
       title: "Phosphor Icons Catalog",
-      description: "Complete catalog of popular Phosphor Icons with metadata",
+      description: "Complete catalog of all Phosphor Icons with metadata",
     },
     async (uri) => {
-      const catalogText = POPULAR_ICONS.map((icon) => {
-        const tags = icon.tags?.join(", ") || "none";
-        return `### ${icon.name}\n- **Category**: ${icon.category || "general"}\n- **Tags**: ${tags}\n- **Weights**: thin, light, regular, bold, fill, duotone`;
-      }).join("\n\n");
+      // Fetch all icon names and catalog data
+      const allIconNames = await fetchAllIconNames();
+      const catalogData = await fetchIconCatalog();
+      
+      // Create maps for quick lookup
+      const catalogMap = new Map(catalogData.map(entry => [entry.name, entry]));
+      const popularIconsMap = new Map(
+        POPULAR_ICONS.map(icon => [icon.name, icon])
+      );
+
+      // Organize icons by category
+      // Icons can have multiple categories, so we'll use the first one for grouping
+      const iconsByCategory = new Map<string, Array<{name: string, tags: string[]}>>();
+      const uncategorizedIcons: Array<{name: string, tags: string[]}> = [];
+
+      for (const iconName of allIconNames) {
+        const catalogEntry = catalogMap.get(iconName);
+        const popularIcon = popularIconsMap.get(iconName);
+        
+        // Use catalog data if available, otherwise fall back to popular icons
+        const categories = catalogEntry?.categories || (popularIcon?.category ? [popularIcon.category] : []);
+        const tags = catalogEntry?.tags || popularIcon?.tags || [];
+        
+        if (categories.length > 0) {
+          // Use the first category for grouping
+          const primaryCategory = categories[0];
+          if (!iconsByCategory.has(primaryCategory)) {
+            iconsByCategory.set(primaryCategory, []);
+          }
+          iconsByCategory.get(primaryCategory)!.push({ name: iconName, tags });
+        } else {
+          uncategorizedIcons.push({ name: iconName, tags });
+        }
+      }
+
+      // Generate catalog text organized by category
+      const categorySections: string[] = [];
+      
+      // Sort categories alphabetically
+      const sortedCategories = Array.from(iconsByCategory.keys()).sort();
+      
+      for (const category of sortedCategories) {
+        const icons = iconsByCategory.get(category)!;
+        const iconList = icons.map(({ name, tags }) => {
+          const tagsStr = tags.length > 0 ? tags.join(", ") : "";
+          return `  - **${name}**${tagsStr ? ` (${tagsStr})` : ""}`;
+        }).join("\n");
+        
+        categorySections.push(`## ${category.charAt(0).toUpperCase() + category.slice(1)}\n\n${iconList}\n`);
+      }
+
+      // Add uncategorized icons if any
+      if (uncategorizedIcons.length > 0) {
+        const uncategorizedList = uncategorizedIcons.map(({ name, tags }) => {
+          const tagsStr = tags.length > 0 ? tags.join(", ") : "";
+          return `  - **${name}**${tagsStr ? ` (${tagsStr})` : ""}`;
+        }).join("\n");
+        categorySections.push(`## General (Uncategorized)\n\n${uncategorizedList}\n`);
+      }
+
+      const catalogText = categorySections.join("\n");
+
+      const catalogCount = catalogData.length;
+      const totalCount = allIconNames.length;
+      const metadataNote = catalogCount > 0 && catalogCount < totalCount
+        ? `\n\n**Note:** ${catalogCount} icons have category metadata from the core package. The remaining ${totalCount - catalogCount} icons are listed under "General (Uncategorized)".`
+        : catalogCount === 0
+        ? `\n\n**Note:** Using fallback categorization from popular icons. ${POPULAR_ICONS.length} icons have detailed metadata.`
+        : "";
 
       return {
         contents: [
           {
             uri: uri.href,
-            text: `# Phosphor Icons Catalog\n\n${POPULAR_ICONS.length} Popular Icons\n\n${catalogText}\n\n---\n\nFull catalog: https://phosphoricons.com\nGitHub: https://github.com/phosphor-icons/core`,
+            text: `# Phosphor Icons Catalog\n\n**Total Icons: ${totalCount}**\n\nIcons organized by category:\n\n${catalogText}${metadataNote}\n\n---\n\nFull catalog: https://phosphoricons.com\nGitHub: https://github.com/phosphor-icons/core`,
             mimeType: "text/markdown",
           },
         ],
@@ -432,18 +1012,42 @@ Configure your default weight in the server settings or specify per-request.`;
         iconName: z.string().describe("Name of the icon to implement"),
         framework: z
           .enum(["html", "react", "vue", "svelte", "angular"])
-          .default("react")
-          .describe("Frontend framework"),
+          .optional()
+          .describe("Frontend framework (default: react)"),
       },
     },
     async ({ iconName, framework = "react" }) => {
+      // Validate inputs
+      if (!iconName || typeof iconName !== "string" || iconName.trim().length === 0) {
+        return {
+          messages: [
+            {
+              role: "user",
+              content: {
+                type: "text",
+                text: "Error: Icon name is required and must be a non-empty string.",
+              },
+            },
+          ],
+        };
+      }
+
+      const selectedFramework = framework || "react";
+      const sanitizedIconName = iconName.trim();
+      const iconComponentName = sanitizedIconName
+        .split("-")
+        .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+        .join("");
+
       const guides: Record<string, string> = {
-        html: `To use '${iconName}' in HTML:\n1. Get the SVG using the 'get-icon' tool\n2. Copy the SVG code directly into your HTML\n3. Customize with CSS classes`,
-        react: `To use '${iconName}' in React:\n1. Get the SVG using the 'get-icon' tool\n2. Or install: npm install @phosphor-icons/react\n\nWith package:\nimport { ${iconName.split("-").map(w => w.charAt(0).toUpperCase() + w.slice(1)).join("")} } from '@phosphor-icons/react';\n<${iconName.split("-").map(w => w.charAt(0).toUpperCase() + w.slice(1)).join("")} size={32} weight="bold" />`,
-        vue: `To use '${iconName}' in Vue:\n1. Get the SVG using the 'get-icon' tool\n2. Or install: npm install @phosphor-icons/vue`,
-        svelte: `To use '${iconName}' in Svelte:\n1. Get the SVG using the 'get-icon' tool\n2. Check https://phosphoricons.com for Svelte packages`,
-        angular: `To use '${iconName}' in Angular:\n1. Get the SVG using the 'get-icon' tool\n2. Check https://phosphoricons.com for Angular packages`,
+        html: `To use '${sanitizedIconName}' in HTML:\n1. Get the SVG using the 'get-icon' tool\n2. Copy the SVG code directly into your HTML\n3. Customize with CSS classes`,
+        react: `To use '${sanitizedIconName}' in React:\n1. Get the SVG using the 'get-icon' tool\n2. Or install: npm install @phosphor-icons/react\n\nWith package:\nimport { ${iconComponentName} } from '@phosphor-icons/react';\n<${iconComponentName} size={32} weight="bold" />`,
+        vue: `To use '${sanitizedIconName}' in Vue:\n1. Get the SVG using the 'get-icon' tool\n2. Or install: npm install @phosphor-icons/vue`,
+        svelte: `To use '${sanitizedIconName}' in Svelte:\n1. Get the SVG using the 'get-icon' tool\n2. Check https://phosphoricons.com for Svelte packages`,
+        angular: `To use '${sanitizedIconName}' in Angular:\n1. Get the SVG using the 'get-icon' tool\n2. Check https://phosphoricons.com for Angular packages`,
       };
+
+      const guideText = guides[selectedFramework] || guides.react;
 
       return {
         messages: [
@@ -451,7 +1055,7 @@ Configure your default weight in the server settings or specify per-request.`;
             role: "user",
             content: {
               type: "text",
-              text: `Please help me implement the '${iconName}' Phosphor icon in my ${framework} project. ${guides[framework]}`,
+              text: `Please help me implement the '${sanitizedIconName}' Phosphor icon in my ${selectedFramework} project. ${guideText}`,
             },
           },
         ],

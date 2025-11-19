@@ -1,2 +1,17 @@
 runtime: typescript
 target: remote
+build:
+  command: npm install && npm run build
+startCommand:
+  type: http
+  command: node dist/index.js
+  configSchema:
+    type: object
+    properties:
+      defaultWeight:
+        type: string
+        title: "Default Icon Weight"
+        description: "Default icon weight/style to use when not specified in tool calls"
+        enum: ["thin", "light", "regular", "bold", "fill", "duotone"]
+        default: "regular"
+    additionalProperties: false

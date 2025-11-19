@@ -4,6 +4,8 @@
 
 A Model Context Protocol (MCP) server that provides access to [Phosphor Icons](https://phosphoricons.com) - a flexible icon family with 6 different weights and over 1,000+ icons.
 
+> **Important**: This is a **community-driven, AI-assisted** MCP server and is **not an official repository** or affiliated with the Phosphor Icons project. This project was created with AI assistance and is maintained by the community. The original Phosphor Icons project can be found at [https://github.com/phosphor-icons](https://github.com/phosphor-icons).
+
 ## Features
 
 - 🎨 **6 Icon Weights**: thin, light, regular, bold, fill, and duotone
@@ -148,6 +150,20 @@ get-multiple-icons({
 })
 ```
 
+## Disclaimer
+
+**NO WARRANTY OR LIABILITY**
+
+THIS SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+**USE AT YOUR OWN RISK**
+
+- This is an **unofficial, community-driven project** created with AI assistance
+- The software is provided without any guarantees or support
+- Users are responsible for testing and validating the software for their use cases
+- The maintainers are not responsible for any damages, data loss, or issues arising from the use of this software
+- This project is not endorsed by or affiliated with the official Phosphor Icons project
+
 ## License
 
 This MCP server is MIT licensed. Phosphor Icons are also MIT licensed.
@@ -155,10 +171,13 @@ This MCP server is MIT licensed. Phosphor Icons are also MIT licensed.
 ## Links
 
 - 🌐 [Phosphor Icons Website](https://phosphoricons.com)
-- 💻 [Phosphor Icons GitHub](https://github.com/phosphor-icons/core)
+- 💻 [Original Phosphor Icons Repository](https://github.com/phosphor-icons) (Official)
+- 📦 [Phosphor Icons Core](https://github.com/phosphor-icons/core)
 - 📖 [Smithery Documentation](https://smithery.ai/docs)
 - 🔧 [MCP Protocol](https://modelcontextprotocol.io)
 
 ## Credits
 
-Icons provided by [Phosphor Icons](https://phosphoricons.com) - created by Tobias Fried.
+- **Icons**: Provided by [Phosphor Icons](https://phosphoricons.com) - created by Tobias Fried
+- **MCP Server**: Community-driven project created with AI assistance
+- **Maintainers**: Community contributors (not affiliated with Phosphor Icons)
