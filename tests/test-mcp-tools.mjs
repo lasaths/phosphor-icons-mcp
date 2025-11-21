@@ -4,6 +4,7 @@
  */
 
 import { z } from 'zod';
+import sharp from 'sharp';
 
 // Import the server creation function
 // Since we can't directly import TypeScript, we'll test the logic
@@ -260,6 +261,36 @@ function testIconNameSanitization() {
   });
 }
 
+// Test 11: get-icon tool - PNG conversion keeps transparency
+async function testPngConversionTransparentBackground() {
+  return test('get-icon: PNG conversion has transparent background', async () => {
+    const iconName = 'heart';
+    const weight = 'regular';
+    const size = 64;
+    const url = `${PHOSPHOR_CORE_RAW_BASE}/${weight}/${iconName}.svg`;
+
+    const response = await fetch(url, {
+      headers: { 'User-Agent': 'PhosphorIconsMCP/1.0.0' }
+    });
+
+    if (!response.ok) return false;
+
+    const svg = await response.text();
+    const pngBuffer = await sharp(Buffer.from(svg))
+      .resize(size, size, { fit: 'contain', background: { r: 0, g: 0, b: 0, alpha: 0 } })
+      .png()
+      .toBuffer();
+
+    if (pngBuffer.length === 0) return false;
+
+    const { data, info } = await sharp(pngBuffer).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
+    const hasAlphaChannel = info.channels >= 4;
+    const firstPixelAlpha = data[3]; // alpha channel of top-left pixel
+
+    return hasAlphaChannel && firstPixelAlpha === 0;
+  });
+}
+
 // Run all tests
 async function runAllTests() {
   console.log('\n📋 Running MCP Tool Tests\n');
@@ -274,6 +305,7 @@ async function runAllTests() {
   testInputValidationEmptyName();
   testInputValidationInvalidSize();
   testIconNameSanitization();
+  await testPngConversionTransparentBackground();
   
   console.log('\n' + '='.repeat(70));
   console.log(`\n📊 Test Results: ${passedTests}/${totalTests} passed\n`);

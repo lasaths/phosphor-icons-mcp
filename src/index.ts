@@ -10,6 +10,9 @@
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
+import sharp from "sharp";
+import path from "path";
+import { promises as fs } from "fs";
 
 /**
  * Base URL for fetching Phosphor Icons from GitHub
@@ -27,6 +30,20 @@ const PHOSPHOR_GITHUB_API = "https://api.github.com/repos/phosphor-icons/core/co
 let allIconsCache: string[] | null = null;
 let allIconsCacheTime: number = 0;
 const CACHE_DURATION = 3600000; // 1 hour in milliseconds
+
+/**
+ * Convert SVG content to a PNG buffer
+ * 
+ * @param svgContent - Raw SVG string
+ * @param size - Optional size in pixels to resize the PNG (width and height)
+ */
+async function svgToPngBuffer(svgContent: string, size?: number): Promise<Buffer> {
+  const pipeline = sharp(Buffer.from(svgContent));
+  const resized = size
+    ? pipeline.resize(size, size, { fit: "contain", background: { r: 0, g: 0, b: 0, alpha: 0 } })
+    : pipeline;
+  return resized.png().toBuffer();
+}
 
 /**
  * Cache for icon catalog data with categories
@@ -348,9 +365,21 @@ export default function createServer({
           .number()
           .optional()
           .describe("Icon size in pixels (sets both width and height). Default: 256"),
+        format: z
+          .enum(["svg", "png"])
+          .optional()
+          .describe("Output format. Default: svg."),
+        saveToFile: z
+          .string()
+          .optional()
+          .describe("When format=png and requesting a single icon, optional path where the PNG will be saved."),
+        saveDir: z
+          .string()
+          .optional()
+          .describe("When format=png and requesting multiple icons, optional directory where PNGs will be saved."),
       },
     },
-    async ({ name, names, weight, color, size }) => {
+    async ({ name, names, weight, color, size, format, saveToFile, saveDir }) => {
       try {
         // Determine if single or multiple icons
         const isMultiple = names !== undefined;
@@ -414,6 +443,56 @@ export default function createServer({
               {
                 type: "text",
                 text: "Error: Size must be a positive number between 1 and 4096 pixels.",
+              },
+            ],
+            isError: true,
+          };
+        }
+
+        const selectedFormat = format || "svg";
+
+        if (saveToFile && selectedFormat !== "png") {
+          return {
+            content: [
+              {
+                type: "text",
+                text: "Error: 'saveToFile' is only supported when format is 'png'.",
+              },
+            ],
+            isError: true,
+          };
+        }
+
+        if (saveDir && selectedFormat !== "png") {
+          return {
+            content: [
+              {
+                type: "text",
+                text: "Error: 'saveDir' is only supported when format is 'png'.",
+              },
+            ],
+            isError: true,
+          };
+        }
+
+        if (saveToFile && isMultiple) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: "Error: 'saveToFile' can only be used when requesting a single icon. Use 'saveDir' for multiple icons.",
+              },
+            ],
+            isError: true,
+          };
+        }
+
+        if (saveDir && !isMultiple) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: "Error: 'saveDir' is only applicable when requesting multiple icons.",
               },
             ],
             isError: true,
@@ -551,6 +630,32 @@ export default function createServer({
           const colorInfo = color ? ` with color '${color}'` : "";
           const sizeInfo = size ? ` at ${size}px` : "";
 
+          if (selectedFormat === "png") {
+            const pngBuffer = await svgToPngBuffer(svgContent, size);
+            let savedPathInfo = "";
+
+            if (saveToFile) {
+              const targetPath = saveToFile.toLowerCase().endsWith(".png")
+                ? saveToFile
+                : `${saveToFile}.png`;
+              const resolvedPath = path.resolve(targetPath);
+              await fs.mkdir(path.dirname(resolvedPath), { recursive: true });
+              await fs.writeFile(resolvedPath, pngBuffer);
+              savedPathInfo = `- Saved to: ${resolvedPath}\n`;
+            }
+
+            const dataUri = `data:image/png;base64,${pngBuffer.toString("base64")}`;
+
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: `# ${iconName} (${selectedWeight}${colorInfo}${sizeInfo})\n\n- Format: png\n- Bytes: ${pngBuffer.length}\n${savedPathInfo}\nData URI (use as <img src=\"...\">):\n\`\`\`\n${dataUri}\n\`\`\``,
+                },
+              ],
+            };
+          }
+
           return {
             content: [
               {
@@ -573,9 +678,10 @@ export default function createServer({
             }
 
             const sanitizedName = iconName.trim().toLowerCase().replace(/[^a-z0-9-]/g, "");
-            const fileName = selectedWeight === "regular" 
-              ? `${sanitizedName}.svg`
-              : `${sanitizedName}-${selectedWeight}.svg`;
+            const baseFileName = selectedWeight === "regular" 
+              ? sanitizedName
+              : `${sanitizedName}-${selectedWeight}`;
+            const fileName = `${baseFileName}.svg`;
             const url = `${PHOSPHOR_CORE_RAW_BASE}/${selectedWeight}/${fileName}`;
             
             const controller = new AbortController();
@@ -625,7 +731,23 @@ export default function createServer({
                 }
               }
 
-              results.push(`## ${iconName}\n\`\`\`svg\n${svgContent}\n\`\`\``);
+              if (selectedFormat === "png") {
+                const pngBuffer = await svgToPngBuffer(svgContent, size);
+                let savedPathText = "";
+
+                if (saveDir) {
+                  const pngDir = path.resolve(saveDir);
+                  const targetPath = path.join(pngDir, `${baseFileName}.png`);
+                  await fs.mkdir(pngDir, { recursive: true });
+                  await fs.writeFile(targetPath, pngBuffer);
+                  savedPathText = `Saved to: ${targetPath}\n`;
+                }
+
+                const dataUri = `data:image/png;base64,${pngBuffer.toString("base64")}`;
+                results.push(`## ${iconName}\nFormat: png • Bytes: ${pngBuffer.length}\n${savedPathText}\`\`\`\n${dataUri}\n\`\`\``);
+              } else {
+                results.push(`## ${iconName}\n\`\`\`svg\n${svgContent}\n\`\`\``);
+              }
             } else {
               // Search for similar icons to suggest alternatives
               const searchTerm = sanitizedName.toLowerCase();
@@ -659,12 +781,13 @@ export default function createServer({
 
         const colorInfo = color ? ` • Color: ${color}` : "";
         const sizeInfo = size ? ` • Size: ${size}px` : "";
+        const formatInfo = selectedFormat === "png" ? " • Format: png" : "";
 
         return {
           content: [
             {
               type: "text",
-              text: `# Batch Icon Results (${selectedWeight}${colorInfo}${sizeInfo})\n\n${results.join("\n\n")}`,
+              text: `# Batch Icon Results (${selectedWeight}${colorInfo}${sizeInfo}${formatInfo})\n\n${results.join("\n\n")}`,
             },
           ],
         };
